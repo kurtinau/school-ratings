@@ -1,5 +1,49 @@
-from pyspark.sql.functions import *
 from awsglue.dynamicframe import DynamicFrame
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.utils import getResolvedOptions
+from awsglue.transforms import Join
+from pyspark.context import SparkContext
+from pyspark.sql.functions import *
+import sys
+import os
+
+
+
+os.environ["PYARROW_IGNORE_TIMEZONE"] = "1"
+raw_data_path_dict = {
+    "income": "s3://school-rating-raw-data/ABS/ABS-Average_household_income.csv",
+    "demographic": "s3://school-rating-raw-data/ABS/ABS-Demographic.csv",
+    "rent": "s3://school-rating-raw-data/ABS/median_weekly_rent_POA_2021.csv"
+}
+
+transformed_data_path_dict = {
+    "suburbinfo": "s3://school-rating-silver-apsourheast2-dev/suburbinfo"
+
+}
+
+def create_dyf(gluecontext,path):
+    # Create a dynamic frame from the S3 bucket for csv file
+    dyf = gluecontext.create_dynamic_frame_from_options(
+        connection_type='s3',
+        connection_options={
+            'paths': [path],
+            'recurse': True
+        },
+        format='csv',
+        format_options={
+            "withHeader": True 
+            }
+    )
+    return dyf
+
+def save_as_parquet(gluecontext,dyf,path):
+    #save transformed file in s3 as a parquet file
+    gluecontext.write_dynamic_frame.from_options(frame=dyf, connection_type="s3", connection_options={
+      "path": path,
+      "partitionKeys": ["year"]
+      }, 
+      format="parquet")
 
 
 def household_income(glue_context, dyf):
@@ -63,17 +107,45 @@ def weekly_rent(glue_context, dyf):
     dyf = DynamicFrame.fromDF(dyf, glue_context, "transformed_weekly_rent")
     return dyf
 
-def house_price(glue_context, dyf):
-    
-    #select 'LGA_2021', 'TIME_PERIOD', 'OBS_VALUE' columns only
-    dyf = dyf.select_fields(['LGA_2021', 'TIME_PERIOD', 'OBS_VALUE'])
-    # Convert dynamic frame to PySpark DataFrame
-    dyf = dyf.toDF()
-    #rename the columns & change the value type to int
-    dyf = dyf.withColumn('OBS_VALUE', col('OBS_VALUE').cast("integer")).withColumn('LGA_2021', col('LGA_2021').cast("integer"))\
-        .withColumnRenamed('LGA_2021', 'local_government_code')\
-        .withColumnRenamed('TIME_PERIOD', 'year')\
-        .withColumnRenamed('OBS_VALUE', 'Median_price_of_established_residential_house_transfers_($)')
-    # convert the resulting DataFrame back to a dynamicframe
-    dyf = DynamicFrame.fromDF(dyf, glue_context, "transformed_house_price")
-    return dyf
+## @params: [JOB_NAME]
+params = []
+if '--JOB_NAME' in sys.argv:
+    params.append('JOB_NAME')
+args = getResolvedOptions(sys.argv, params)
+gluecontext = GlueContext(SparkContext.getOrCreate())
+job = Job(gluecontext)
+if 'JOB_NAME' in args:
+    jobname = args['JOB_NAME']
+else:
+    jobname = "test"
+job.init(jobname, args)
+
+#create dyf for median income file, run clean function
+dyf_median_income = create_dyf(gluecontext,raw_data_path_dict['income'])
+dyf_median_income = household_income(gluecontext, dyf_median_income)
+
+
+#create dyf for demographic, run clean function
+dyf_demographic = create_dyf(gluecontext,raw_data_path_dict['demographic'])
+dyf_demographic = demographic_info(gluecontext, dyf_demographic)
+
+#create dyf for weekly_rent, run clean function
+dyf_weekly_rent = create_dyf(gluecontext,raw_data_path_dict['rent'])
+dyf_weekly_rent = weekly_rent(gluecontext, dyf_weekly_rent)
+
+#join the three dyf by post code
+joined_dyf = Join.apply(dyf_weekly_rent.drop_fields(['State','year']), 
+                        Join.apply(dyf_demographic,
+                                   dyf_median_income.drop_fields(['State','year']), 
+                                   'Post_code_D', 'Post_code_HI'), 
+                                   'Post_code_WR', 'Post_code_HI').drop_fields(['Post_code_HI', 'Post_code_WR'])
+#rearrange order of the columns
+joined_dyf = joined_dyf.apply_mapping([('year', 'string', 'year', 'int'), ('Post_code_D', 'int', 'postcode', 'int'), 
+           ('Median total household income ($/weekly)', 'int', 'median_total_household_income_($/weekly)', 'int'),
+           ('Median_weekly_rent', 'int', 'median_weekly_rent', 'int'),
+           ('Population', 'int', 'population', 'int'), ('State', 'string', 'state', 'string')])
+
+save_as_parquet(gluecontext,joined_dyf,transformed_data_path_dict['suburbinfo'])
+
+job.commit()
+
