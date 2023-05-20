@@ -9,6 +9,7 @@ from pyspark.sql.functions import (
     lower,
     trim,
     when,
+    concat_ws,
 )
 from pyspark.sql.types import StringType
 from pyspark.sql.window import Window
@@ -58,7 +59,6 @@ def join_tables_with_campus_removed(left_table, right_table, dim_table_id_str):
     right_anti_sdf = right_table.join(
         left_table, ["school_name", "postcode"], "leftanti"
     )
-
     right_anti_sdf_with_campus = right_anti_sdf.filter(col("school_name").like("% - %"))
     right_anti_sdf_without_campus = right_anti_sdf_with_campus.withColumn(
         "school_name", trim(regexp_extract("school_name", r'^"?(.+?)\s+-\s+', 1))
@@ -95,10 +95,9 @@ def combine_profile_and_details_df():
         .withColumnRenamed(
             "language_background_other_than_english_-_yes_(%)", "multi_lingual"
         )
-        .withColumnRenamed("location_age_id", "location_id")
+        .withColumnRenamed("location_age_id", "ageid")
         .select(
             "school_id",
-            "location_id",
             "school_name",
             "school_type",
             "campus_type",
@@ -117,7 +116,11 @@ def combine_profile_and_details_df():
             "state",
         )
     )
-
+    profile_sdf = profile_sdf.withColumn(
+        "location_id", row_number().over(Window.orderBy("school_id"))
+    )
+    print("Profile count and schema: ", profile_sdf.count())
+    profile_sdf.printSchema()
     # Read detail file from website crawling
     school_detail_sdf = read_csv(spark, raw_data_path_dict["detail"])
     school_detail_sdf = school_detail_sdf.select(
@@ -128,27 +131,7 @@ def combine_profile_and_details_df():
     union_sdf = join_tables_with_campus_removed(
         profile_sdf, school_detail_sdf, "profile_id"
     )
-
-    profile_dim_table = union_sdf.drop("school_id", "suburb", "postcode", "state")
-    print("Profile Dim table count and schema: ", profile_dim_table.count())
-    profile_dim_table.printSchema()
-    # create tables that fit star schema
-    school_fact_table = union_sdf.select(
-        "school_id",
-        "school_name",
-        "profile_id",
-        "location_id",
-        "suburb",
-        "postcode",
-        "state",
-    )
-    ## store profileDim table to s3 bucket
-    save_spark_df_to_s3_as_parquet(
-        glueContext,
-        profile_dim_table,
-        transformed_data_path_dict["profile_dim_table"],
-    )
-    return school_fact_table
+    return union_sdf
 
 
 def create_naplan_dim_and_bridge_table(school_id_name_sdf):
@@ -177,18 +160,30 @@ def create_naplan_dim_and_bridge_table(school_id_name_sdf):
     ).na.drop(subset=["reading", "writing", "spelling", "grammar", "numeracy"])
     print("naplan dim table schema and count: ", naplan_dim_table.count())
     naplan_dim_table.printSchema()
-    # store school_naplan bridge table to s3
+    # store school_naplan bridge table to s3 silver bucket
     save_spark_df_to_s3_as_parquet(
         glueContext,
         school_naplan_bridge_table,
         transformed_data_path_dict["school_naplan_bridge_table"],
     )
-    # store naplan dim table to s3
+    # store naplan dim table to s3 to s3 silver bucket
     save_spark_df_to_s3_as_parquet(
         glueContext,
         naplan_dim_table,
         transformed_data_path_dict["napalan_dim_table"],
     )
+    # # store school_naplan bridge table to s3 gold bucket
+    # save_spark_df_to_s3_as_parquet(
+    #     glueContext,
+    #     school_naplan_bridge_table,
+    #     transformed_data_path_dict["gold"]["school_naplan_bridge_table"],
+    # )
+    # # store naplan dim table to s3 to s3 gold bucket
+    # save_spark_df_to_s3_as_parquet(
+    #     glueContext,
+    #     naplan_dim_table,
+    #     transformed_data_path_dict["gold"]["napalan_dim_table"],
+    # )
 
 
 def create_fees_dim_and_bridge_table(school_id_name_sdf):
@@ -223,18 +218,30 @@ def create_fees_dim_and_bridge_table(school_id_name_sdf):
     )
     print("fees dim table schema and count: ", fees_dim_table.count())
     fees_dim_table.printSchema()
-    # store school_fees bridge table to s3
+    # store school_fees bridge table to s3 silver bucket
     save_spark_df_to_s3_as_parquet(
         glueContext,
         school_fees_bridge_table,
         transformed_data_path_dict["school_fees_bridge_table"],
     )
-    # store fess dim table to s3
+    # store fess dim table to s3 silver bucket
     save_spark_df_to_s3_as_parquet(
         glueContext,
         fees_dim_table,
         transformed_data_path_dict["fees_dim_table"],
     )
+    # # store school_fees bridge table to s3 gold bucket
+    # save_spark_df_to_s3_as_parquet(
+    #     glueContext,
+    #     school_fees_bridge_table,
+    #     transformed_data_path_dict["gold"]["school_fees_bridge_table"],
+    # )
+    # # store fess dim table to s3 gold bucket
+    # save_spark_df_to_s3_as_parquet(
+    #     glueContext,
+    #     fees_dim_table,
+    #     transformed_data_path_dict["gold"]["fees_dim_table"],
+    # )
 
 
 def join_location_and_catchment_on_column(
@@ -250,8 +257,8 @@ def join_location_and_catchment_on_column(
     Returns:
         Dataframe: The result of left join.
     """
-    inner_join_sdf = location_sdf.join(catchment_sdf, on_column)
-    print("Inner join count: ", inner_join_sdf.count())
+    # inner_join_sdf = location_sdf.join(catchment_sdf, on_column)
+    # print("Inner join count: ", inner_join_sdf.count())
     left_join_sdf = location_sdf.join(catchment_sdf, on_column, "left")
     if on_column != "school_name":
         left_join_sdf = left_join_sdf.drop(on_column)
@@ -321,7 +328,7 @@ def handle_NSW_data():
             geo_df_secondary.loc[:, ["USE_ID", "geometry"]],
         ]
     ).drop_duplicates()
-    print("NSW catchment count before merge duplicate: ", combined_geo_df.count())
+    # print("NSW catchment count before merge duplicate: ", combined_geo_df.count())
     combined_geo_df = merge_duplicate_catchment_rows_based_on_unique_id(
         combined_geo_df, "USE_ID"
     )
@@ -335,7 +342,13 @@ def handle_NSW_data():
     # spark_df.printSchema()
     # print("master dataset count: ", master_dataset_sdf.count())
     master_dataset_sdf = master_dataset_sdf.drop_duplicates(["school_code"]).select(
-        "school_code", "ageid"
+        "school_code",
+        "ageid",
+        concat_ws(
+            ",", col("street"), col("town_suburb"), lit("NSW"), col("postcode")
+        ).alias("address"),
+        "phone",
+        "fax",
     )
     # master_dataset_sdf.printSchema()
     # print("master dataset count after drop: ", master_dataset_sdf.count())
@@ -352,9 +365,27 @@ def handle_QLD_data():
         2.1 extract centre_code from Description (process html table)
     3.inner join catchment and centre_detail on centre_code ====> centre_name, geometry
     """
-    centre_detail_sdf = read_csv(
-        spark, raw_data_path_dict["catchment"]["QLD"]["centre_detail"]
-    ).drop_duplicates(["centre_code"])
+    centre_detail_sdf = (
+        read_csv(spark, raw_data_path_dict["catchment"]["QLD"]["centre_detail"])
+        .drop_duplicates(["centre_code"])
+        .withColumnRenamed("phone_number", "phone")
+        .withColumnRenamed("fax_number", "fax")
+        .withColumnRenamed("actual_address_line_2", "street")
+        .withColumnRenamed("actual_address_post_code", "postcode")
+        .select(
+            "centre_name",
+            "centre_code",
+            concat_ws(
+                ",",
+                col("street"),
+                col("actual_address_line_3"),
+                lit("QLD"),
+                col("postcode"),
+            ).alias("address"),
+            "phone",
+            "fax",
+        )
+    )
     primary_geo_df = read_kml_file(raw_data_path_dict["catchment"]["QLD"]["PS_data"])
     junior_secondary_geo_df = read_kml_file(
         raw_data_path_dict["catchment"]["QLD"]["JS_data"]
@@ -365,7 +396,7 @@ def handle_QLD_data():
     combined_geo_df = pd.concat(
         [primary_geo_df, junior_secondary_geo_df, senior_secondary_geo_df]
     ).drop_duplicates()
-    print("QLD catchment count before merge duplicate: ", combined_geo_df.count())
+    # print("QLD catchment count before merge duplicate: ", combined_geo_df.count())
     combined_geo_df = merge_duplicate_catchment_rows_based_on_unique_id(
         combined_geo_df, "Name"
     )
@@ -382,7 +413,7 @@ def handle_QLD_data():
     geo_sdf.printSchema()
     join_df = (
         geo_sdf.join(centre_detail_sdf, "centre_code")
-        .select("centre_name", "catchment")
+        .drop("centre_code")
         .withColumnRenamed("centre_name", "school_name")
     )
     print("QLD catchment inner join centre_detail count: ", join_df.count())
@@ -396,11 +427,18 @@ def handle_SA_data():
     2. catchment -> ORG_NUM, geometry
     3. inner join catchemnt and decd_sites to get ---> FULL_NAME, geometry
     """
-    decd_sdf = read_xlsx(
-        glueContext,
-        raw_data_path_dict["catchment"]["SA"]["decd_sites"],
-        2,
-        0,
+    decd_sdf = (
+        read_xlsx(
+            glueContext,
+            raw_data_path_dict["catchment"]["SA"]["decd_sites"],
+            2,
+            0,
+        )
+        .drop_duplicates(["org_unit_no"])
+        .withColumnRenamed("org_unit_no", "org_id")
+        .withColumnRenamed("full_name", "school_name")
+        .withColumnRenamed("physical_address", "address")
+        .select("org_id", "school_name", "address", "phone", "fax")
     )
     geo_df_primary = read_shape_file(
         glueContext,
@@ -417,7 +455,7 @@ def handle_SA_data():
             geo_df_secondary.loc[:, ["ORG_NUM", "geometry"]],
         ]
     ).drop_duplicates()
-    print("SA catchment count before merge duplicate: ", combined_geo_df.count())
+    # print("SA catchment count before merge duplicate: ", combined_geo_df.count())
     combined_geo_df = merge_duplicate_catchment_rows_based_on_unique_id(
         combined_geo_df, "ORG_NUM"
     )
@@ -427,12 +465,12 @@ def handle_SA_data():
         .withColumnRenamed("wkt", "catchment")
     )
     print("After SA catchment: ", geo_sdf.count())
-    decd_sdf = (
-        decd_sdf.drop_duplicates(["org_unit_no"])
-        .select("org_unit_no", "full_name")
-        .withColumnRenamed("org_unit_no", "org_id")
-        .withColumnRenamed("full_name", "school_name")
-    )
+    # decd_sdf = (
+    #     decd_sdf.drop_duplicates(["org_unit_no"])
+    #     .select("org_unit_no", "full_name")
+    #     .withColumnRenamed("org_unit_no", "org_id")
+    #     .withColumnRenamed("full_name", "school_name")
+    # )
     join_df = geo_sdf.join(decd_sdf, "org_id").drop("org_id")
     print("SA catchment inner join decd_sites count and schema: ", join_df.count())
     join_df.printSchema()
@@ -462,14 +500,29 @@ def handle_VIC_data():
             geo_df = read_geo_json(file_path)
             combined_geo_df = pd.concat([combined_geo_df, geo_df])
     if not combined_geo_df.empty:
-        # combined_geo_df = combined_geo_df.drop_duplicates().astype(
-        #     {"Boundary_Year": "string"}
-        # )
+        vic_dataset_sdf = (
+            read_csv(spark, raw_data_path_dict["vic_dataset"])
+            .withColumnRenamed("address_line_1", "street")
+            .withColumnRenamed("full_phone_no", "phone")
+            .withColumnRenamed("address_postcode", "postcode")
+            .select(
+                "school_name",
+                concat_ws(
+                    ",",
+                    col("street"),
+                    col("address_town"),
+                    lit("VIC"),
+                    col("postcode"),
+                ).alias("address"),
+                "phone",
+                col("phone").alias("fax"),
+            )
+        )
         combined_geo_df = combined_geo_df.drop_duplicates()
         combined_geo_df = combined_geo_df.loc[
             :, ["ENTITY_CODE", "School_Name", "Campus_Name", "geometry"]
         ]
-        print("VIC catchment count before merge duplicate: ", combined_geo_df.count())
+        # print("VIC catchment count before merge duplicate: ", combined_geo_df.count())
         combined_geo_df = merge_duplicate_catchment_rows_based_on_unique_id(
             combined_geo_df, "ENTITY_CODE"
         )
@@ -480,6 +533,7 @@ def handle_VIC_data():
             .drop("ENTITY_CODE")
             .drop("Campus_Name")
         )
+        geo_sdf = geo_sdf.join(vic_dataset_sdf, "school_name", "left")
         print("After VIC catchment: ", geo_sdf.count())
         # geo_sdf = (
         #     geo_sdf.withColumn(
@@ -515,7 +569,8 @@ else:
 job.init(jobname, args)
 
 raw_bucket_prefix = "s3://school-rating-raw-data"
-silver_bucket_prefix = "s3://school-rating-raw-data/stage-test1"
+silver_bucket_prefix = "s3://school-rating-silver-apsoutheast2-dev"
+gold_bucket_prefix = "s3://school-rating-gold-apsoutheast2-dev"
 raw_data_path_dict = {
     "profile": raw_bucket_prefix
     + "/school-profile/input/school-profile-202111812f404c94637ead88ff00003e0139.xlsx",
@@ -524,6 +579,8 @@ raw_data_path_dict = {
     "fees": raw_bucket_prefix + "/web-crawler/fees/fees.csv",
     "location": raw_bucket_prefix
     + "/school-location/input/school-location-2021e23a2f404c94637ead88ff00003e0139.xlsx",
+    "vic_dataset": raw_bucket_prefix
+    + "/school-profile/vic-school-detail/dv309_schoollocations2021.csv",
     "catchment": {
         "NSW": {
             "master_dataset": raw_bucket_prefix
@@ -595,26 +652,84 @@ transformed_data_path_dict = {
     "fees_dim_table": silver_bucket_prefix
     + "/scrapy/au/fees/year="
     + get_todays_year(),
+    "gold": {
+        "school_naplan_bridge_table": gold_bucket_prefix
+        + "/scrapy/au/school_naplan/year="
+        + get_todays_year(),
+        "napalan_dim_table": gold_bucket_prefix
+        + "/scrapy/au/naplan/year="
+        + get_todays_year(),
+        "school_fees_bridge_table": gold_bucket_prefix
+        + "/scrapy/au/school_fees/year="
+        + get_todays_year(),
+        "fees_dim_table": gold_bucket_prefix
+        + "/scrapy/au/fees/year="
+        + get_todays_year(),
+        "school_list_table": gold_bucket_prefix
+        + "/gov-website/au/school_list/year="
+        + get_todays_year(),
+        "school_table_NSW": gold_bucket_prefix
+        + "/school/year="
+        + get_todays_year()
+        + "/state=NSW",
+        "school_table_VIC": gold_bucket_prefix
+        + "/school/year="
+        + get_todays_year()
+        + "/state=VIC",
+        "school_table_QLD": gold_bucket_prefix
+        + "/school/year="
+        + get_todays_year()
+        + "/state=QLD",
+        "school_table_SA": gold_bucket_prefix
+        + "/school/year="
+        + get_todays_year()
+        + "/state=SA",
+        "school_table_TAS": gold_bucket_prefix
+        + "/school/year="
+        + get_todays_year()
+        + "/state=TAS",
+        "school_table_ACT": gold_bucket_prefix
+        + "/school/year="
+        + get_todays_year()
+        + "/state=ACT",
+        "school_table_NT": gold_bucket_prefix
+        + "/school/year="
+        + get_todays_year()
+        + "/state=NT",
+    },
 }
 
 # # keep school fact table to be used later
-school_fact_table = combine_profile_and_details_df()
-# # create middle table for other glue jobs to use
-school_id_name_sdf = school_fact_table.select(
-    "school_id", "school_name", "suburb", "postcode"
+profile_sdf = combine_profile_and_details_df()
+print("After union outside function profile count and schema: ", profile_sdf.count())
+profile_sdf.printSchema()
+# profile_sdf.show(2, False)
+### create tables that fit star schema
+school_fact_table = profile_sdf.select(
+    "school_id",
+    "school_name",
+    "location_id",
+    "profile_id",
+    "suburb",
+    "postcode",
+    "state",
 )
 
-## save school fact table
+# # create middle table for other glue jobs to use
+school_id_name_sdf = profile_sdf.select(
+    "school_id", "school_name", "location_id", "suburb", "postcode"
+)
+# save school fact table
 save_spark_df_to_s3_as_parquet(
     glueContext,
     school_fact_table,
     transformed_data_path_dict["school_fact_table"],
 )
 
-create_naplan_dim_and_bridge_table(school_id_name_sdf)
-create_fees_dim_and_bridge_table(school_id_name_sdf)
+create_naplan_dim_and_bridge_table(school_id_name_sdf.drop("location_id"))
+create_fees_dim_and_bridge_table(school_id_name_sdf.drop("location_id"))
 
-##### Deal with location and catchment data
+#### Deal with location and catchment data
 location_sdf = read_xlsx(
     glueContext,
     raw_data_path_dict["location"],
@@ -642,15 +757,14 @@ location_sdf = (
 )
 
 print("location count:: ", location_sdf.count())
-location_sdf = location_sdf.join(school_id_name_sdf.select("school_id"), "school_id")
-location_sdf = location_sdf.withColumn(
-    "location_id", row_number().over(Window.orderBy("school_id"))
+location_sdf = location_sdf.join(
+    school_id_name_sdf.select("school_id", "location_id"), "school_id"
 )
-# reorder location dataframe to get location_id at the beginning
 location_sdf = location_sdf.select(
     [location_sdf.columns[-1]] + location_sdf.columns[:-1]
 )
-# print("location count and schema after:: ", location_sdf.count())
+print("location count and schema after:: ", location_sdf.count())
+location_sdf.printSchema()
 
 ###NSW catchment-location
 print("-------------------------NSW----------------------------")
@@ -664,7 +778,7 @@ print("NSW transformed count and schema: ", nsw_transformed_sdf.count())
 nsw_transformed_sdf.printSchema()
 
 
-###QLD catchment-location
+# ###QLD catchment-location
 print("-------------------------QLD----------------------------")
 qld_location_sdf = location_sdf.filter(location_sdf.state == "QLD")
 print("QLD location count: ", qld_location_sdf.count())
@@ -676,7 +790,7 @@ print("QLD transformed count and schema: ", qld_transformed_sdf.count())
 qld_transformed_sdf.printSchema()
 
 
-###SA catchment-location
+# ###SA catchment-location
 print("-------------------------SA----------------------------")
 sa_location_sdf = location_sdf.filter(location_sdf.state == "SA")
 print("SA location count: ", sa_location_sdf.count())
@@ -687,7 +801,7 @@ sa_transformed_sdf = join_location_and_catchment_on_column(
 print("SA transformed count and schema: ", sa_transformed_sdf.count())
 sa_transformed_sdf.printSchema()
 
-###VIC catchment-location
+# ###VIC catchment-location
 print("-------------------------VIC----------------------------")
 vic_location_sdf = location_sdf.filter(location_sdf.state == "VIC")
 print("VIC location count: ", vic_location_sdf.count())
@@ -718,6 +832,109 @@ save_spark_df_to_s3_as_parquet(
     glueContext,
     vic_transformed_sdf,
     transformed_data_path_dict["location_dim_table"]["VIC"],
+)
+
+
+### add latitude and longitude to school_list table
+union_location_sdf = (
+    nsw_transformed_sdf.union(qld_transformed_sdf)
+    .union(sa_transformed_sdf)
+    .union(vic_transformed_sdf)
+)
+print("union location count and schema: ", union_location_sdf.count())
+union_location_sdf.printSchema()
+### create school table to gold bucket
+school_table = (
+    profile_sdf.drop("profile_id")
+    .join(union_location_sdf, "location_id", "left")
+    .drop("location_id")
+    .withColumn(
+        "name_suburb_postcode",
+        concat_ws(
+            " - ", col("school_name"), concat_ws(" ", col("suburb"), col("postcode"))
+        ),
+    )
+)
+### combine school_profile and location to a school table
+print("school table count and schema: ", school_table.count())
+school_table.printSchema()
+# school_table.drop("catchment").show(5, False)
+# ## create schoolList table to gold bucket
+# school_list_table = school_table.select(
+#     "school_id",
+#     concat_ws(
+#         "-", col("school_name"), concat_ws(" ", col("suburb"), col("postcode"))
+#     ).alias("name_suburb_postcode"),
+#     "school_name",
+#     "school_type",
+#     "address",
+#     "suburb",
+#     "state",
+#     "postcode",
+#     "latitude",
+#     "longitude",
+# )
+# print("school list table count and schema: ", school_list_table.count())
+# school_list_table.printSchema()
+
+## store school_list table to s3 bucket
+# save_spark_df_to_s3_as_parquet(
+#     glueContext,
+#     school_list_table,
+#     transformed_data_path_dict["gold"]["school_list_table"],
+# )
+
+# ## store school table to s3 bucket
+save_spark_df_to_s3_as_parquet(
+    glueContext,
+    school_table.filter(school_table.state == "NSW").drop("state"),
+    transformed_data_path_dict["gold"]["school_table_NSW"],
+)
+save_spark_df_to_s3_as_parquet(
+    glueContext,
+    school_table.filter(school_table.state == "VIC").drop("state"),
+    transformed_data_path_dict["gold"]["school_table_VIC"],
+)
+save_spark_df_to_s3_as_parquet(
+    glueContext,
+    school_table.filter(school_table.state == "QLD").drop("state"),
+    transformed_data_path_dict["gold"]["school_table_QLD"],
+)
+save_spark_df_to_s3_as_parquet(
+    glueContext,
+    school_table.filter(school_table.state == "SA").drop("state"),
+    transformed_data_path_dict["gold"]["school_table_SA"],
+)
+save_spark_df_to_s3_as_parquet(
+    glueContext,
+    school_table.filter(school_table.state == "TAS").drop("state"),
+    transformed_data_path_dict["gold"]["school_table_TAS"],
+)
+save_spark_df_to_s3_as_parquet(
+    glueContext,
+    school_table.filter(school_table.state == "ACT").drop("state"),
+    transformed_data_path_dict["gold"]["school_table_ACT"],
+)
+save_spark_df_to_s3_as_parquet(
+    glueContext,
+    school_table.filter(school_table.state == "NT").drop("state"),
+    transformed_data_path_dict["gold"]["school_table_NT"],
+)
+
+## add address,phone,fax to profile dim table
+profile_dim_table = profile_sdf.drop("suburb", "postcode", "state")
+profile_dim_table = profile_dim_table.join(
+    school_table.select("school_id", "address", "phone", "fax"), "school_id", "left"
+).drop("school_id")
+print("Profile Dim table count and schema: ", profile_dim_table.count())
+profile_dim_table.printSchema()
+# profile_dim_table.drop("catchment").show(5, False)
+
+## store profileDim table to s3 bucket
+save_spark_df_to_s3_as_parquet(
+    glueContext,
+    profile_dim_table,
+    transformed_data_path_dict["profile_dim_table"],
 )
 
 job.commit()
