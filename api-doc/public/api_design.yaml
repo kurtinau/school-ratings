@@ -1,0 +1,604 @@
+openapi: 3.0.3
+info:
+  title: Datateer Schoolratings
+  description: |-
+    This is a sample School-ratings Server based on the OpenAPI 3.1 specification.
+
+  termsOfService: http://datateer.com.au/terms/
+  contact:
+    email: apiteam@datateer.com.au
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  version: 1.0.11
+externalDocs:
+  description: Find out more about Datateer
+  url: http://datateer.com.au
+servers:
+  - url: https://schoolratings.datateer.com.au/api
+tags:
+  - name: school
+    description: Searching school list
+  - name: profile
+    description: Access to School Profile
+  - name: location
+    description: Everything about school location
+  - name: catchment
+    description: Everything about school intake zones
+  - name: tuition
+    description: Everything about school tuition fees
+  - name: naplan
+    description: Everything about school NAPLAN scores
+  - name: suburb
+    description: Everything about suburb around schools
+  - name: house
+    description: Everything about house price around schools
+paths:
+  /school/searchByName:
+    get:
+      tags:
+        - school
+      summary: Returns school list by name
+      description: Returns a list of school name with state, suburb, postcode
+      operationId: searchSchoolsByName
+      parameters:
+        - name: school_name
+          in: query
+          description: School name that need to be considered for searching
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/School"
+            application/xml:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/School"
+        "400":
+          description: Invalid name supplied
+        "404":
+          description: School not found
+      security:
+        - api_key: []
+  /profile/{profile_id}:
+    get:
+      tags:
+        - profile
+      summary: Find school profile by ID
+      description: Returns a single school profile
+      operationId: getProfileById
+      parameters:
+        - name: profile_id
+          in: path
+          description: ID of school profile to return
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+            application/xml:
+              schema:
+                $ref: "#/components/schemas/Profile"
+        "400":
+          description: Invalid ID supplied
+        "404":
+          description: Profile not found
+      security:
+        - api_key: []
+  /location/{location_id}:
+    get:
+      tags:
+        - location
+      summary: Find school location detail by ID
+      description: Returns a single school location
+      operationId: getLocationById
+      parameters:
+        - name: location_id
+          in: path
+          description: ID of school location to return
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Location"
+            application/xml:
+              schema:
+                $ref: "#/components/schemas/Location"
+        "400":
+          description: Invalid ID supplied
+        "404":
+          description: Location not found
+      security:
+        - api_key: []
+  /catchment/checkValidIntake:
+    get:
+      tags:
+        - catchment
+      summary: Check if a coordinate is inside any school intake zone
+      description: Return false, otherwise true with found schools that fit given lat and lon
+      operationId: checkValidIntake
+      parameters:
+        - name: lat
+          in: path
+          description: the latitude of a coordinate
+          required: true
+          schema:
+            type: number
+            format: double
+        - name: lon
+          in: path
+          description: the longitude of a coordinate
+          required: true
+          schema:
+            type: number
+            format: double
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidIntake"
+            application/xml:
+              schema:
+                $ref: "#/components/schemas/ValidIntake"
+        "400":
+          description: Invalid coordinate supplied
+      security:
+        - api_key: []
+  /tuition/{fees_id}:
+    get:
+      tags:
+        - tuition
+      summary: Find school tuition fees by ID
+      description: Returns school fees
+      operationId: getFeesById
+      parameters:
+        - name: fees_id
+          in: path
+          description: ID of school fees that needs to be fetched
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Fees"
+            application/xml:
+              schema:
+                $ref: "#/components/schemas/Fees"
+        "400":
+          description: Invalid ID supplied
+        "404":
+          description: School fees not found
+      security:
+        - api_key: []
+  /naplan/{naplan_id}:
+    get:
+      tags:
+        - naplan
+      summary: Find NAPLAN score for school by ID
+      description: Returns NAPLAN score
+      operationId: getNaplanById
+      parameters:
+        - name: naplan_id
+          in: path
+          description: ID of school NAPLAN that needs to be fetched
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Naplan"
+            application/xml:
+              schema:
+                $ref: "#/components/schemas/Naplan"
+        "400":
+          description: Invalid ID supplied
+        "404":
+          description: School naplan not found
+      security:
+        - api_key: []
+  /suburb/{postcode}:
+    get:
+      tags:
+        - suburb
+      summary: Find suburb information by postcode
+      description: Returns population,rent,household income
+      operationId: getSuburbByPostcode
+      parameters:
+        - name: postcode
+          in: path
+          description: postcode of suburb
+          required: true
+          schema:
+            type: integer
+            format: int32
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuburbInfo"
+            application/xml:
+              schema:
+                $ref: "#/components/schemas/SuburbInfo"
+        "400":
+          description: Invalid postcode supplied
+        "404":
+          description: Suburb not found
+      security:
+        - api_key: []
+  /house/{local_gov_code}:
+    get:
+      tags:
+        - house
+      summary: Find price of established house transfers
+      description: Returns the median price of house transfers
+      operationId: getHousePriceByGovCode
+      parameters:
+        - name: local_gov_code
+          in: path
+          description: local government code
+          required: true
+          schema:
+            type: integer
+            format: int32
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HousePrice"
+            application/xml:
+              schema:
+                $ref: "#/components/schemas/HousePrice"
+        "400":
+          description: Invalid code supplied
+        "404":
+          description: House price not found
+      security:
+        - api_key: []
+components:
+  schemas:
+    School:
+      type: object
+      properties:
+        school_id:
+          type: integer
+          format: int64
+          example: 50684
+        school_name:
+          type: string
+          example: Auburn High School
+        suburb:
+          type: string
+          example: Hawthorn East
+        state:
+          type: string
+          example: VIC
+        postcode:
+          type: integer
+          format: int32
+          example: 3123
+        location_id:
+          type: integer
+          format: int64
+          example: 9256
+        profile_id:
+          type: integer
+          format: int64
+          example: 9255
+      xml:
+        name: school
+    Profile:
+      type: object
+      properties:
+        profile_id:
+          type: integer
+          format: int64
+          example: 9255
+        school_name:
+          type: string
+          example: Auburn High School
+        school_type:
+          type: string
+          example: Secondary
+        campus_type:
+          type: string
+          example: School Single Entity
+        school_sector:
+          type: string
+          example: Government
+        school_url:
+          type: string
+          example: "http://www.auburnhs.vic.edu.au/"
+        governing_body:
+          type: string
+          example: Department of Education and Training Victoria
+        year_range:
+          type: string
+          example: 7-12
+        girls_enrolments:
+          type: integer
+          format: int64
+          example: 221
+        boys_enrolments:
+          type: integer
+          format: int64
+          example: 395
+        indigenous:
+          type: integer
+          format: int64
+          example: 0
+        multi_lingual:
+          type: integer
+          format: int64
+          example: 52
+        gender:
+          type: string
+          example: Co-Ed
+        religion:
+          type: string
+          example: secular
+      xml:
+        name: profile
+    Location:
+      type: object
+      properties:
+        location_id:
+          type: integer
+          format: int64
+          example: 9256
+        school_name:
+          type: string
+          example: Auburn High School
+        suburb:
+          type: string
+          example: Hawthorn East
+        state:
+          type: string
+          example: VIC
+        postcode:
+          type: integer
+          format: int32
+          example: 3123
+        latitude:
+          type: number
+          format: double
+          example: -37.83968
+        longitude:
+          type: number
+          format: double
+          example: 145.04544
+        local_government_code:
+          type: integer
+          format: int64
+          example: 21110
+        local_government:
+          type: string
+          example: Boroondara (C)
+        geolocation:
+          type: string
+          example: Major Cities
+        catchment:
+          type: string
+          example: POLYGON ((145.0711008085377 -37.85679713589098, 145.0711009 -37.8567973, 145.0655152 -37.8650964, 145.06551495085623 -37.865096375863956, 145.0655148 -37.8650966, 145.0140432 -37.8601103, 145.0110062 -37.8574176, 145.0110063183823 -37.85741690910988, 145.0044818 -37.851631, 145.00448240522942 -37.851630282143304, 144.9946682 -37.8429255, 145.0288582 -37.8111116, 145.0484803 -37.8162094, 145.0711009 -37.856797, 145.0711008085377 -37.85679713589098))
+      xml:
+        name: location
+    Fees:
+      type: object
+      properties:
+        fees_id:
+          type: integer
+          format: int64
+          example: 10
+        boarding:
+          type: integer
+          format: int32
+          example: 0
+        international:
+          type: integer
+          format: int32
+          example: 1
+        kinder:
+          type: number
+          format: double
+          example: 33000
+        prep:
+          type: number
+          format: double
+          example: 32000
+        grade1:
+          type: number
+          format: double
+          example: 0
+        grade2:
+          type: number
+          format: double
+          example: 34333
+        grade3:
+          type: number
+          format: double
+          example: 28000
+        grade4:
+          type: number
+          format: double
+          example: 0
+        grade5:
+          type: number
+          format: double
+          example: 0
+        grade6:
+          type: number
+          format: double
+          example: 0
+        year7:
+          type: number
+          format: double
+          example: 0
+        year8:
+          type: number
+          format: double
+          example: 0
+        year9:
+          type: number
+          format: double
+          example: 0
+        year10:
+          type: number
+          format: double
+          example: 0
+        year11:
+          type: number
+          format: double
+          example: 0
+        year12:
+          type: number
+          format: double
+          example: 0
+    ValidIntake:
+      type: object
+      properties:
+        intake:
+          type: bool
+          example: true
+        schools:
+          type: array
+          items:
+            $ref: "#/components/schemas/Profile"
+    Naplan:
+      type: object
+      properties:
+        naplan_id:
+          type: integer
+          format: int32
+          example: 20
+        grade:
+          type: string
+          example: grade3
+        year:
+          type: string
+          example: 2022
+        numeracy: 
+          type: string
+          example: 440
+        reading: 
+          type: string
+          example: 437
+        writing: 
+          type: string
+          example: 437
+        spelling: 
+          type: string
+          example: 450
+        gramar: 
+          type: string
+          example: 481
+    SuburbInfo:
+      type: object
+      properties:
+        state:
+          type: string
+          example: New South Wales
+        postcode: 
+          type: integer
+          format: int32
+          example: 2350
+        median_weekly_income:
+          type: integer
+          format: int64
+          example: 1459
+        median_weekly_rent:
+          type: integer
+          format: int64
+          example: 290
+        population:
+          type: integer
+          format: int64
+          example: 26911
+        year:
+          type: string
+          example: 2021
+    HousePrice:
+      type: object
+      properties:
+        local_government_code:
+          type: integer
+          format: int32
+          example: 16350
+        local_government:
+          type: string
+          example: Penrith (C)
+        median_price_house_transfers:
+          type: integer
+          example: 684275
+        year:
+          type: string
+          example: 2020
+    ApiResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          format: int32
+        type:
+          type: string
+        message:
+          type: string
+      xml:
+        name: "##default"
+  requestBodies:
+    School:
+      description: School object that needs to be added
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/School"
+        application/xml:
+          schema:
+            $ref: "#/components/schemas/School"
+  securitySchemes:
+    # schoolratings_auth:
+    #   type: oauth2
+    #   flows:
+    #     implicit:
+    #       authorizationUrl: https://schoolratings.datateer.com.au/oauth/authorize
+    #       scopes:
+    #         write:schools: modify schools in your account
+    #         read:schools: read schools
+    api_key:
+      type: apiKey
+      name: api_key
+      in: header
