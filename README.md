@@ -15,4 +15,4 @@ Please make sure to contact [school-ratings@datateer.com.au](mailto:school-ratin
 
 ## License
 
-[MIT](LIENSE)
+[MIT](LICENSE)
